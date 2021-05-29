@@ -3,48 +3,71 @@
 # Contributor: Hugo Doria <hugo@archlinux.org>
 
 pkgname=libtorrent-rasterbar
-pkgver=1.2.11
-pkgrel=1
+pkgver=2.0.3
+pkgrel=0.1
 epoch=1
 pkgdesc="A C++ BitTorrent library that aims to be a good alternative to all the other implementations around"
 url="https://www.rasterbar.com/products/libtorrent/"
 arch=('x86_64')
 license=('BSD')
-depends=('boost-libs')
-makedepends=('boost' 'python')
+depends=('boost-libs' 'openssl')
+makedepends=('boost' 'python-setuptools' 'boost.build' 'git')
+_commit=af7a96c1df47fcc8fbe0d791c223b0ab8a7d2125 #v2.0.3
 options=('!emptydirs')
-source=(https://github.com/arvidn/libtorrent/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz
-        $pkgname-cxx14-fix.patch::https://github.com/arvidn/libtorrent/pull/5026.patch)
-sha512sums=('abcfaa9f22f9adc030f0c4ec8dfd2e5070d1177cc2cf0bcb4e08dfca1b2e806a5c90a82d1860b5dc51efe3e8d2bea3c1d3d966c132a39bfdd5d4791e59bb503a'
-            '94ddc3bdfc33f7b5300cc01b7c821dbd9a1433cae93bb7d467a1a732e84e7be4a6e75fbd69e88802e2eecca9c8541ecd1856d4ca2b508af224562cb05de80cca')
+source=(#https://github.com/arvidn/libtorrent/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz #does not contain examples/torrent2magnet.cpp
+        "$pkgname::git+https://github.com/arvidn/libtorrent.git#commit=$_commit"
+         git+https://github.com/arvidn/libsimulator.git
+         git+https://github.com/arvidn/try_signal.git
+         git+https://github.com/paullouisageneau/boost-asio-gnutls.git)
+sha512sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
 
 prepare() {
-  cd $pkgname-$pkgver
-  # https://bugs.archlinux.org/task/67754
-  patch -p1 -i ../$pkgname-cxx14-fix.patch
+#  cd $pkgname-$pkgver
+  cd $pkgname
 
-  # Avoid depending on newer processors
-  sed -i 's/-msse4.2//' configure.ac
+  git submodule init
+  git config submodule.simulation/libsimulator.url "$srcdir"/libsimulator
+  git config submodule.deps/try_signal.url "$srcdir"/try_signal
+  git config submodule.deps/asio-gnutls.url "$srcdir"/boost-asio-gnutls
+  git submodule update
 
-  autoreconf -if
+  git cherry-pick -n f61aedc326029b5c32168d0087b912651f84b4d7 # fix b2 build of custom_storage
+  git cherry-pick -n 9dd7196087bc7e30711c77f6635450c0dcc51a61 # fix b2 installation of symlinks for libraries
+  sed -i 's/exe bt-/exe bt_/' examples/Jamfile #change bt-get{,2,3} back to using _ instead of -
+  sed -i 's/exe dht/exe dht_put/' tools/Jamfile #change dht back to dht_put
 }
 
+_options="crypto=openssl cxxstd=17 link=shared runtime-link=shared address-model=64 release" #set all options used in any of the directories to prevent building a variant for each directory
+
 build() {
-  cd $pkgname-$pkgver
-  ./configure \
-    --prefix=/usr \
-    --enable-python-binding \
-    --enable-examples \
-    --disable-static \
-    --with-libiconv \
-    --with-boost-python=boost_python3
+#  cd $pkgname-$pkgver
+  cd $pkgname
+
+  b2 $_options
+  cd examples
+  b2 $_options
+  cd ../tools
+  b2 $_options
+  cd ..
+
+  python setup.py build
 }
 
 package() {
-  cd $pkgname-$pkgver
-  make DESTDIR="$pkgdir" install
-  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+#  cd $pkgname-$pkgver
+  cd $pkgname
 
-  # Remove most example binaries
-  rm "$pkgdir"/usr/bin/{*_test,*_tester,simple_client,stats_counters}
+  b2 install $_options --prefix="$pkgdir"/usr
+  install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  local _bin
+  for _bin in bt_get bt_get2 bt_get3 dht_put dump_torrent custom_storage make_torrent session_log_alerts
+  do
+    echo "$_bin"
+    find -name $_bin -execdir install -Dm 755 '{}' -t "$pkgdir/usr/bin" \;
+  done
+
+  python setup.py install --root="$pkgdir" --optimize=1 --skip-build
 }
